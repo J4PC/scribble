@@ -9,7 +9,7 @@
     "config.scribble.option.show_action_buttons.never": "Nie",
     "config.scribble.option.edit_history_size": "Länge der Rückgängig-/Wiederherstellungshistorie",
     "text.scribble.action.delete_page": "Seite löschen",
-    "text.scribble.action.insert_new_page": "Neue Seite einfügen",
+    "text.scribble.action.insert_new_page": "Neue Seite einfügen\nvor der aktuellen",
     "text.scribble.action.undo": "Rückgängig",
     "text.scribble.action.redo": "Wiederherstellen",
     "text.scribble.action.save_book_to_file": "Buch in Datei speichern...",
