@@ -261,13 +261,16 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
     @Unique
     private void scribble$deletePage(boolean goBack) {
         if (this.pages.size() > 1) {
-            PageDeleteCommand command = new PageDeleteCommand(this.currentPage,
-                    this.scribble$getRichEditBoxWidget().getRichTextField().getRichText());
+            int pageToDelete = this.currentPage;
+            PageDeleteCommand command = new PageDeleteCommand(pageToDelete, this.scribble$getRichEditBoxWidget().getRichTextField().getRichText());
             command.execute(this);
-            if (goBack && this.currentPage > 0) {
-                this.currentPage--;
-                this.updatePageContent();
-                this.updateButtonVisibility();
+
+            if (goBack) {// If triggered via backspace we want to go left of the current page insed of right which is the default behavior
+                if (pageToDelete < this.pages.size()) {
+                    this.currentPage = pageToDelete - 1;
+                    this.updatePageContent();
+                    this.updateButtonVisibility();
+                }
             }
             scribble$commandManager.push(command);
             this.scribble$dirty = true;
