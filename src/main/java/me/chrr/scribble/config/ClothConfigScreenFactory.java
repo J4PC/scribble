@@ -66,6 +66,15 @@ public class ClothConfigScreenFactory {
                 .setSaveConsumer((value) -> config.editHistorySize = value)
                 .build());
 
+        category.addEntry(entryBuilder.startBooleanToggle(
+                        Component.translatable("config.scribble.option.page_overflow"),
+                        config.pageOverflow
+                )
+                .setDefaultValue(Config.DEFAULT.pageOverflow)
+                .setTooltip(Component.translatable("config.scribble.description.page_overflow"))
+                .setSaveConsumer((value) -> config.pageOverflow = value)
+                .build());
+
         return builder.build();
     }
 }

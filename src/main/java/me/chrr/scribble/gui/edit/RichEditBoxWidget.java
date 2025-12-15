@@ -31,6 +31,12 @@ public class RichEditBoxWidget extends MultiLineEditBox {
     private final Runnable onInvalidateFormat;
     @Nullable
     private final Consumer<EditCommand> onHistoryPush;
+    @Nullable
+    private final PageOverflowHandler onPageOverflow;
+    @Nullable
+    private final Consumer<Boolean> onInsertPage; // true = after, false = before
+    @Nullable
+    private final Consumer<Boolean> onDeletePage; // true = go back, false = stay
 
     @Nullable
     public ChatFormatting color = ChatFormatting.BLACK;
@@ -39,10 +45,14 @@ public class RichEditBoxWidget extends MultiLineEditBox {
     private RichEditBoxWidget(Font font, int x, int y, int width, int height,
                               Component placeholder, Component message, int textColor, boolean textShadow, int cursorColor,
                               boolean hasBackground, boolean hasOverlay,
-                              @Nullable Runnable onInvalidateFormat, @Nullable Consumer<EditCommand> onHistoryPush) {
+                              @Nullable Runnable onInvalidateFormat, @Nullable Consumer<EditCommand> onHistoryPush,
+                              @Nullable PageOverflowHandler onPageOverflow, @Nullable Consumer<Boolean> onInsertPage, @Nullable Consumer<Boolean> onDeletePage) {
         super(font, x, y, width, height, placeholder, message, textColor, textShadow, cursorColor, hasBackground, hasOverlay);
         this.onInvalidateFormat = onInvalidateFormat;
         this.onHistoryPush = onHistoryPush;
+        this.onPageOverflow = onPageOverflow;
+        this.onInsertPage = onInsertPage;
+        this.onDeletePage = onDeletePage;
 
         this.textField = new RichMultiLineTextField(
                 font, width - this.totalInnerPadding(),
@@ -52,6 +62,11 @@ public class RichEditBoxWidget extends MultiLineEditBox {
                     this.modifiers = new HashSet<>(modifiers);
                     this.notifyInvalidateFormat();
                 });
+    }
+    
+    @FunctionalInterface //Interface for handling page overflow when text exceeds page limit
+    public interface PageOverflowHandler {
+        boolean handleOverflow(RichText remainingContent, RichText overflowContent, int cursorPos);
     }
 
     private void notifyInvalidateFormat() {
@@ -192,6 +207,11 @@ public class RichEditBoxWidget extends MultiLineEditBox {
     @Override
     public boolean charTyped(CharacterEvent event) {
         if (this.visible && this.isFocused() && event.isAllowedChatCharacter()) {
+            // Check if we need to handle page overflow
+            if (onPageOverflow != null && handlePotentialOverflow(event.codepointAsString())) {
+                return true;
+            }
+            
             EditCommand command = new EditCommand(this.getRichTextField(),
                     (editBox) -> editBox.insertText(event.codepointAsString()));
             command.executeEdit(this.getRichTextField());
@@ -199,6 +219,54 @@ public class RichEditBoxWidget extends MultiLineEditBox {
             return true;
         } else {
             return false;
+        }
+    }
+
+    // Check if typing this character would cause overflow, and handle it if so
+    private boolean handlePotentialOverflow(String newChar) {
+        RichMultiLineTextField textField = getRichTextField();
+        RichText currentText = textField.getRichText();
+        int cursor = textField.cursor();
+        
+        if (cursor != currentText.getLength()) { //Cursor at the very end of the page
+            //The following fixes the edge cases where there is a space after the point where the user types and when there are formatting codes after the cursor.
+            String textAfterCursor = currentText.subText(cursor, currentText.getLength()).getPlainText();
+            if (!textAfterCursor.trim().isEmpty()) {
+                return false;
+            }
+        }
+        // Count lines and get last line in one pass
+        int lineCount = 0;
+        MultilineTextField.StringView lastLine = null;
+        for (MultilineTextField.StringView line : this.textField.iterateLines()) {
+            lastLine = line;
+            lineCount++;
+        }  
+        if (lineCount < textField.lineLimit) {  
+            return false; // Not at line limit yet: No overflow possible
+        }
+        
+        // At line limit: Check if adding char would cause the last line to wrap
+        String plainText = currentText.getPlainText();
+        String lastLineText = plainText.substring(lastLine.beginIndex(), lastLine.endIndex());
+        if (font.width(lastLineText + newChar) <= textField.width) {
+            return false; // Still fits on current line
+        }
+        
+        // Overflow confirmed: Create styled new char and handle split
+        RichText newCharText = new RichText(newChar, color != null ? color : ChatFormatting.BLACK, modifiers);
+        // Two cases for splitting:
+        // 1. No space in last line (e.g. long word/ornamentation): only new char moves
+        // 2. Has space: break at last space to keep word intact
+        int lastSpace = lastLineText.lastIndexOf(' ');
+        if (lastSpace == -1) {
+            return onPageOverflow.handleOverflow(currentText, newCharText, 1);
+        } else {
+            int splitPoint = lastLine.beginIndex() + lastSpace + 1;
+            RichText remainingContent = currentText.subText(0, splitPoint);
+            RichText overflowContent = currentText.subText(splitPoint, plainText.length())
+                .insert(plainText.length() - splitPoint, newCharText);
+            return onPageOverflow.handleOverflow(remainingContent, overflowContent, overflowContent.getLength());
         }
     }
 
@@ -221,6 +289,18 @@ public class RichEditBoxWidget extends MultiLineEditBox {
             }
         }
 
+        // Enter at end of full page -> new page after (only if overflow handling is enabled)
+        if ((event.key() == GLFW.GLFW_KEY_ENTER || event.key() == GLFW.GLFW_KEY_KP_ENTER) && onPageOverflow != null && onInsertPage != null) {
+            if (textField.cursor() == getRichTextField().getRichText().getLength() && textField.getLineCount() >= getRichTextField().lineLimit) {
+                onInsertPage.accept(true);
+                return true;
+            }
+        }
+        // Backspace on empty page -> delete and go back (only if overflow handling is enabled)
+        if (event.key() == GLFW.GLFW_KEY_BACKSPACE && onPageOverflow != null && onDeletePage != null && getRichTextField().getRichText().isEmpty()) {
+            onDeletePage.accept(true);
+            return true;
+        }
         // Wrap the operation with an edit command if it edits the text.
         if (event.isCut() || event.isPaste() ||
                 List.of(GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER,
@@ -252,6 +332,12 @@ public class RichEditBoxWidget extends MultiLineEditBox {
         private Runnable onInvalidateFormat = null;
         @Nullable
         private Consumer<EditCommand> onHistoryPush = null;
+        @Nullable
+        private PageOverflowHandler onPageOverflow = null;
+        @Nullable
+        private Consumer<Boolean> onInsertPage = null;
+        @Nullable
+        private Consumer<Boolean> onDeletePage = null;
 
         public Builder onInvalidateFormat(Runnable onInvalidateFormat) {
             this.onInvalidateFormat = onInvalidateFormat;
@@ -263,13 +349,29 @@ public class RichEditBoxWidget extends MultiLineEditBox {
             return this;
         }
 
+        public Builder onPageOverflow(PageOverflowHandler onPageOverflow) {
+            this.onPageOverflow = onPageOverflow;
+            return this;
+        }
+
+        public Builder onInsertPage(Consumer<Boolean> onInsertPage) {
+            this.onInsertPage = onInsertPage;
+            return this;
+        }
+
+        public Builder onDeletePage(Consumer<Boolean> onDeletePage) {
+            this.onDeletePage = onDeletePage;
+            return this;
+        }
+
         @Override
         public @NotNull MultiLineEditBox build(Font font, int width, int height, Component message) {
             return new RichEditBoxWidget(font,
                     this.x, this.y, width, height,
                     this.placeholder, message, this.textColor,
                     this.textShadow, this.cursorColor, this.showBackground,
-                    this.showDecorations, this.onInvalidateFormat, this.onHistoryPush);
+                    this.showDecorations, this.onInvalidateFormat, this.onHistoryPush,
+                    this.onPageOverflow, this.onInsertPage, this.onDeletePage);
         }
     }
 }

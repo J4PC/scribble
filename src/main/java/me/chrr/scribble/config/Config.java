@@ -8,6 +8,7 @@ public class Config {
     public boolean centerBookGui = true;
     public ShowActionButtons showActionButtons = ShowActionButtons.WHEN_EDITING;
     public int editHistorySize = 32;
+    public boolean pageOverflow = true;
 
     @DeprecatedConfigOption
     private boolean showSaveLoadButtons = true;

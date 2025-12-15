@@ -20,6 +20,7 @@ import me.chrr.scribble.history.HistoryListener;
 import me.chrr.scribble.history.command.EditCommand;
 import me.chrr.scribble.history.command.PageDeleteCommand;
 import me.chrr.scribble.history.command.PageInsertCommand;
+import me.chrr.scribble.history.command.PageOverflowCommand;
 import net.minecraft.ChatFormatting;
 import net.minecraft.client.gui.ActiveTextCollector;
 import net.minecraft.client.gui.TextAlignment;
@@ -133,9 +134,17 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
 
     @Redirect(method = "init", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/components/MultiLineEditBox;builder()Lnet/minecraft/client/gui/components/MultiLineEditBox$Builder;"))
     public MultiLineEditBox.Builder buildEditBoxWidget() {
-        return new RichEditBoxWidget.Builder()
+        RichEditBoxWidget.Builder builder = new RichEditBoxWidget.Builder()
                 .onInvalidateFormat(this::scribble$invalidateFormattingButtons)
                 .onHistoryPush(this::scribble$pushEditCommand);
+        
+        if (Scribble.CONFIG_MANAGER.getConfig().pageOverflow) {
+            builder.onPageOverflow(this::scribble$handlePageOverflow)
+                   .onInsertPage(this::scribble$insertPage)
+                   .onDeletePage(this::scribble$deletePage);
+        }
+        
+        return builder;
     }
 
     @Unique
@@ -234,11 +243,11 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
 
         scribble$deletePageButton = addRenderableWidget(new IconButtonWidget(
                 Component.translatable("text.scribble.action.delete_page"),
-                this::scribble$deletePage,
+                () -> this.scribble$deletePage(false),
                 x + 94, y + 148, 0, 90, 12, 12));
         scribble$insertPageButton = addRenderableWidget(new IconButtonWidget(
                 Component.translatable("text.scribble.action.insert_new_page"),
-                this::scribble$insertPage,
+                () -> this.scribble$insertPage(false),
                 x + 78, y + 148, 12, 90, 12, 12));
     }
 
@@ -249,27 +258,32 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
     }
 
     @Unique
-    private void scribble$deletePage() {
+    private void scribble$deletePage(boolean goBack) {
         if (this.pages.size() > 1) {
-            // See scribble$history$deletePage for implementation.
             PageDeleteCommand command = new PageDeleteCommand(this.currentPage,
                     this.scribble$getRichEditBoxWidget().getRichTextField().getRichText());
             command.execute(this);
-
+            if (goBack && this.currentPage > 0) {
+                this.currentPage--;
+                this.updatePageContent();
+                this.updateButtonVisibility();
+            }
             scribble$commandManager.push(command);
             this.scribble$dirty = true;
+            this.scribble$invalidateActionButtons();
         }
     }
 
     @Unique
-    private void scribble$insertPage() {
+    private void scribble$insertPage(boolean after) {
         if (this.pages.size() < 100) {
-            // See scribble$history$insertPage for implementation.
-            PageInsertCommand command = new PageInsertCommand(this.currentPage);
+            int insertAt = after ? this.currentPage + 1 : this.currentPage;
+            PageInsertCommand command = new PageInsertCommand(insertAt, after);
             command.execute(this);
-
+            // execute() already switches to the new page and updates visibility
             scribble$commandManager.push(command);
             this.scribble$dirty = true;
+            this.scribble$invalidateActionButtons();
         }
     }
     //endregion
@@ -423,6 +437,28 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
 
         this.scribble$commandManager.push(command);
         this.scribble$invalidateActionButtons();
+    }
+
+    @Unique
+    private boolean scribble$handlePageOverflow(RichText remainingContent, RichText overflowContent, int cursorPos) {
+        // Check if we can add a new page (max 100 pages)
+        if (this.pages.size() >= 100) {
+            return false;
+        }
+
+        // Get the original content before overflow for undo purposes
+        RichText originalContent = this.scribble$getRichEditBoxWidget().getRichTextField().getRichText();
+
+        // Create and execute the page overflow command
+        PageOverflowCommand command = new PageOverflowCommand(
+            this.currentPage, originalContent, remainingContent, overflowContent, cursorPos);
+        command.execute(this);
+
+        this.scribble$commandManager.push(command);
+        this.scribble$dirty = true;
+        this.scribble$invalidateActionButtons();
+
+        return true;
     }
     //endregion
 
