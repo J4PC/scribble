@@ -25,6 +25,11 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.ArrayList;
+import me.chrr.scribble.Scribble;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.Style;
+import me.chrr.scribble.history.command.Command;
 
 public class RichEditBoxWidget extends MultiLineEditBox {
     @Nullable
@@ -32,9 +37,11 @@ public class RichEditBoxWidget extends MultiLineEditBox {
     @Nullable
     private final Consumer<EditCommand> onHistoryPush;
     @Nullable
+    private final Consumer<Command> onCommandPush;
+    @Nullable
     private final PageOverflowHandler onPageOverflow;
     @Nullable
-    private final Consumer<Boolean> onInsertPage; // true = after, false = before
+    private final Consumer<Boolean> onInsertPage; // true = insert BEFORE (left) current page, false = insert AFTER (right) current page
     @Nullable
     private final Consumer<Boolean> onDeletePage; // true = go back, false = stay
 
@@ -46,13 +53,15 @@ public class RichEditBoxWidget extends MultiLineEditBox {
                               Component placeholder, Component message, int textColor, boolean textShadow, int cursorColor,
                               boolean hasBackground, boolean hasOverlay,
                               @Nullable Runnable onInvalidateFormat, @Nullable Consumer<EditCommand> onHistoryPush,
-                              @Nullable PageOverflowHandler onPageOverflow, @Nullable Consumer<Boolean> onInsertPage, @Nullable Consumer<Boolean> onDeletePage) {
+                              @Nullable PageOverflowHandler onPageOverflow, @Nullable Consumer<Boolean> onInsertPage, @Nullable Consumer<Boolean> onDeletePage,
+                              @Nullable Consumer<Command> onCommandPush) {
         super(font, x, y, width, height, placeholder, message, textColor, textShadow, cursorColor, hasBackground, hasOverlay);
         this.onInvalidateFormat = onInvalidateFormat;
         this.onHistoryPush = onHistoryPush;
         this.onPageOverflow = onPageOverflow;
         this.onInsertPage = onInsertPage;
         this.onDeletePage = onDeletePage;
+        this.onCommandPush = onCommandPush;
 
         this.textField = new RichMultiLineTextField(
                 font, width - this.totalInnerPadding(),
@@ -272,6 +281,72 @@ public class RichEditBoxWidget extends MultiLineEditBox {
 
     @Override
     public boolean keyPressed(KeyEvent event) {
+        if (event.isPaste() && this.onCommandPush != null) {
+            String clipboard = Minecraft.getInstance().keyboardHandler.getClipboard();
+            if (clipboard == null || clipboard.isEmpty()) return true;
+
+            RichMultiLineTextField editBox = getRichTextField();
+            boolean keepFormatting = Scribble.CONFIG_MANAGER.getConfig().copyFormattingCodes ^ event.hasShiftDown();
+
+            RichText replacement = keepFormatting // Build replacement text
+                ? RichText.fromFormattedString(clipboard)
+                : new RichText(ChatFormatting.stripFormatting(clipboard), 
+                            Optional.ofNullable(this.color).orElse(ChatFormatting.BLACK), 
+                            this.modifiers);
+
+            // Insert into current text
+            MultilineTextField.StringView sel = editBox.getSelected();
+            RichText current = editBox.getRichText();
+            RichText full = (sel.beginIndex() != sel.endIndex()) 
+                ? current.replace(sel.beginIndex(), sel.endIndex(), replacement)
+                : current.insert(sel.beginIndex(), replacement);
+
+            // Binary search splits text into chunks, trying to fill the 14 lines per page
+            List<RichText> chunks = new ArrayList<>();
+            int totalLen = full.getLength();
+            int pos = 0;
+            int lastChunkSize = -1;
+
+            while (pos < totalLen && chunks.size() < 100) {
+                int remaining = totalLen - pos;
+                int lo, hi;
+                // Narrow search range based on previous page size
+                if (lastChunkSize > 0 && chunks.size() > 0) { // Pages 2+: Search around previous page size (±20%)
+                    lo = Math.max(1, (int)(lastChunkSize * 0.8));
+                    hi = Math.min(remaining, (int)(lastChunkSize * 1.2));
+                } else {  // First page: Full search (might be partially filled)
+                    lo = 0;
+                    hi = remaining;
+                }
+                while (lo < hi) {
+                    int mid = (lo + hi + 1) / 2;
+                    int lines = this.font.getSplitter().splitLines(
+                        full.subText(pos, pos + mid), editBox.width, Style.EMPTY
+                    ).size();
+                    if (lines <= editBox.lineLimit) lo = mid;
+                    else hi = mid - 1;
+                }
+
+                int end = pos + Math.max(1, lo);
+                chunks.add(full.subText(pos, end));
+                lastChunkSize = lo;
+                pos = end;
+            }
+
+            if (chunks.size() <= 1) {// Single page: Use standard edit command
+                EditCommand cmd = new EditCommand(editBox, (box) -> box.insertText(clipboard));
+                cmd.executeEdit(editBox);
+                this.pushHistory(cmd);
+                return true;
+            }
+            // Multi-page paste
+            this.onCommandPush.accept(new me.chrr.scribble.history.command.PasteCommand(
+                -1, current, chunks.get(0), chunks.subList(1, chunks.size()),
+                chunks.get(chunks.size() - 1).getLength()
+            ));
+            return true;
+        }
+
         // Respond to common hotkeys for toggling modifiers, such as Ctrl-B for bold.
         if (event.hasControlDown() && !event.hasShiftDown() && !event.hasAltDown()) {
             ChatFormatting modifier = switch (event.key()) {
@@ -292,7 +367,8 @@ public class RichEditBoxWidget extends MultiLineEditBox {
         // Enter at end of full page -> new page after (only if overflow handling is enabled)
         if ((event.key() == GLFW.GLFW_KEY_ENTER || event.key() == GLFW.GLFW_KEY_KP_ENTER) && onPageOverflow != null && onInsertPage != null) {
             if (textField.cursor() == getRichTextField().getRichText().getLength() && textField.getLineCount() >= getRichTextField().lineLimit) {
-                onInsertPage.accept(true);
+                // Enter should insert AFTER the current page, so pass `false` (false = insert after)
+                onInsertPage.accept(false);
                 return true;
             }
         }
@@ -333,6 +409,8 @@ public class RichEditBoxWidget extends MultiLineEditBox {
         @Nullable
         private Consumer<EditCommand> onHistoryPush = null;
         @Nullable
+        private Consumer<Command> onCommandPush = null;
+        @Nullable
         private PageOverflowHandler onPageOverflow = null;
         @Nullable
         private Consumer<Boolean> onInsertPage = null;
@@ -346,6 +424,11 @@ public class RichEditBoxWidget extends MultiLineEditBox {
 
         public Builder onHistoryPush(Consumer<EditCommand> onHistoryPush) {
             this.onHistoryPush = onHistoryPush;
+            return this;
+        }
+
+        public Builder onCommandPush(Consumer<Command> onCommandPush) {
+            this.onCommandPush = onCommandPush;
             return this;
         }
 
@@ -371,7 +454,8 @@ public class RichEditBoxWidget extends MultiLineEditBox {
                     this.placeholder, message, this.textColor,
                     this.textShadow, this.cursorColor, this.showBackground,
                     this.showDecorations, this.onInvalidateFormat, this.onHistoryPush,
-                    this.onPageOverflow, this.onInsertPage, this.onDeletePage);
+                    this.onPageOverflow, this.onInsertPage, this.onDeletePage,
+                    this.onCommandPush);
         }
     }
 }

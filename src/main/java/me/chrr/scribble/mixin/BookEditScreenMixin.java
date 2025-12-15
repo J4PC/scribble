@@ -136,7 +136,8 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
     public MultiLineEditBox.Builder buildEditBoxWidget() {
         RichEditBoxWidget.Builder builder = new RichEditBoxWidget.Builder()
                 .onInvalidateFormat(this::scribble$invalidateFormattingButtons)
-                .onHistoryPush(this::scribble$pushEditCommand);
+                .onHistoryPush(this::scribble$pushEditCommand)
+                .onCommandPush(this::scribble$pushCommand);
         
         if (Scribble.CONFIG_MANAGER.getConfig().pageOverflow) {
             builder.onPageOverflow(this::scribble$handlePageOverflow)
@@ -246,9 +247,9 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
                 () -> this.scribble$deletePage(false),
                 x + 94, y + 148, 0, 90, 12, 12));
         scribble$insertPageButton = addRenderableWidget(new IconButtonWidget(
-                Component.translatable("text.scribble.action.insert_new_page"),
-                () -> this.scribble$insertPage(false),
-                x + 78, y + 148, 12, 90, 12, 12));
+            Component.translatable("text.scribble.action.insert_new_page"),
+            () -> this.scribble$insertPage(true),
+            x + 78, y + 148, 12, 90, 12, 12));
     }
 
     @Inject(method = "updateButtonVisibility", at = @At(value = "HEAD"))
@@ -275,12 +276,10 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
     }
 
     @Unique
-    private void scribble$insertPage(boolean after) {
+    private void scribble$insertPage(boolean before) {
         if (this.pages.size() < 100) {
-            int insertAt = after ? this.currentPage + 1 : this.currentPage;
-            PageInsertCommand command = new PageInsertCommand(insertAt, after);
+            PageInsertCommand command = new PageInsertCommand(this.currentPage, before);
             command.execute(this);
-            // execute() already switches to the new page and updates visibility
             scribble$commandManager.push(command);
             this.scribble$dirty = true;
             this.scribble$invalidateActionButtons();
@@ -398,13 +397,12 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
 
     @Override
     public void scribble$history$insertPage(int page, @Nullable RichText content) {
-        this.scribble$history$switchPage(page);
-
         String text = "";
         if (content != null)
             text = content.getAsFormattedString();
 
         this.pages.add(page, text);
+        this.scribble$history$switchPage(page);
         this.updatePageContent();
         this.updateButtonVisibility();
     }
@@ -439,21 +437,36 @@ public abstract class BookEditScreenMixin extends Screen implements HistoryListe
         this.scribble$invalidateActionButtons();
     }
 
+@Unique
+private void scribble$pushCommand(me.chrr.scribble.history.command.Command command) {
+    if (command instanceof me.chrr.scribble.history.command.PasteCommand paste) {
+        int capacity = 100 - this.pages.size();
+        
+        if (paste.getOverflowCount() > capacity) {
+            command = paste.withTrimmedOverflow(Math.max(0, capacity));
+        } else {
+            command = paste;
+        }
+        ((me.chrr.scribble.history.command.PasteCommand)command).page = this.currentPage;
+    }
+    command.execute(this);
+    this.scribble$commandManager.push(command);
+    this.scribble$dirty = true;
+    this.scribble$invalidateActionButtons();
+}
+
     @Unique
     private boolean scribble$handlePageOverflow(RichText remainingContent, RichText overflowContent, int cursorPos) {
-        // Check if we can add a new page (max 100 pages)
+        // Check if we can add a new page
         if (this.pages.size() >= 100) {
             return false;
         }
 
         // Get the original content before overflow for undo purposes
         RichText originalContent = this.scribble$getRichEditBoxWidget().getRichTextField().getRichText();
-
-        // Create and execute the page overflow command
         PageOverflowCommand command = new PageOverflowCommand(
             this.currentPage, originalContent, remainingContent, overflowContent, cursorPos);
         command.execute(this);
-
         this.scribble$commandManager.push(command);
         this.scribble$dirty = true;
         this.scribble$invalidateActionButtons();
