@@ -74,6 +74,7 @@ public class ScribbleBookEditScreen extends ScribbleBookScreen<RichText> impleme
     private @Nullable IconButtonWidget redoButton;
 
     private final List<IconButtonWidget> insertPageButtons = new ArrayList<>();
+    private final List<IconButtonWidget> deletePageButtons = new ArrayList<>();
 
     private @Nullable ModifierButtonWidget boldButton;
     private @Nullable ModifierButtonWidget italicButton;
@@ -149,6 +150,7 @@ public class ScribbleBookEditScreen extends ScribbleBookScreen<RichText> impleme
     @Override
     protected void initPageButtons(int y) {
         this.insertPageButtons.clear();
+        this.deletePageButtons.clear();
 
         for (int i = 0; i < this.pagesToShow; i++) {
             int xOffset = this.pagesToShow == 1
@@ -171,14 +173,14 @@ public class ScribbleBookEditScreen extends ScribbleBookScreen<RichText> impleme
                         commandManager.push(command);
                     },
                     getBackgroundX() + 78 + xOffset + i * 126, y + 2, 12, 90, 12, 12)));
-            addRenderableWidget(new IconButtonWidget(deleteText,
+            this.deletePageButtons.add(addRenderableWidget(new IconButtonWidget(deleteText,
                     () -> {
                         PageDeleteCommand command = new PageDeleteCommand(this.currentPage + pageOffset,
                                 this.pages.get(this.currentPage + pageOffset), 1); // Navigate right
                         command.execute(this);
                         commandManager.push(command);
                     },
-                    getBackgroundX() + 94 + xOffset + i * 126, y + 2, 0, 90, 12, 12));
+                    getBackgroundX() + 94 + xOffset + i * 126, y + 2, 0, 90, 12, 12)));
         }
     }
 
@@ -186,6 +188,7 @@ public class ScribbleBookEditScreen extends ScribbleBookScreen<RichText> impleme
     public void updateCurrentPages() {
         super.updateCurrentPages();
         this.insertPageButtons.forEach((button) -> button.visible = this.getTotalPages() < 100);
+        this.deletePageButtons.forEach((button) -> button.visible = this.getTotalPages() > 1);
     }
 
     @Override

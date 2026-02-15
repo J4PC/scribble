@@ -282,7 +282,7 @@ public class RichEditBox extends MultiLineEditBox implements TextArea<RichText> 
 
         // Handle Paste with different behaviors based on config
         if (event.isPaste()) {
-            String clipboardText = Minecraft.getInstance().keyboardHandler.getClipboard();
+            String clipboardText = Minecraft.getInstance().keyboardHandler.getClipboard().replace("\r", "");
             boolean keepFormatting = Scribble.config().copyFormattingCodes.get() ^ event.hasShiftDown();
             if (!keepFormatting) clipboardText = ChatFormatting.stripFormatting(clipboardText);
             
